@@ -16,4 +16,13 @@ public interface OrderService {
     Page<OrderResponse> listOrders(UUID customerId, Pageable pageable);
 
     OrderResponse cancelOrder(UUID id);
+
+    /**
+     * Reacts to an {@code InventoryReservationFailedEvent} from the saga:
+     * cancels the order if it's still {@code PENDING}. Must be safe to call
+     * more than once with the same {@code orderId} (Kafka delivery is at
+     * least once), so an order that's already {@code CANCELLED} is a no-op
+     * rather than a conflict.
+     */
+    void handleInventoryReservationFailed(UUID orderId, String reason);
 }

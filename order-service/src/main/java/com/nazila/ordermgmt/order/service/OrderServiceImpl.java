@@ -1,11 +1,20 @@
 package com.nazila.ordermgmt.order.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nazila.ordermgmt.events.EventEnvelope;
+import com.nazila.ordermgmt.events.EventType;
+import com.nazila.ordermgmt.events.OrderCreatedEvent;
+import com.nazila.ordermgmt.events.OrderLineItem;
 import com.nazila.ordermgmt.order.domain.Order;
 import com.nazila.ordermgmt.order.domain.OrderItem;
+import com.nazila.ordermgmt.order.domain.OrderStatus;
+import com.nazila.ordermgmt.order.outbox.OrderOutboxEvent;
+import com.nazila.ordermgmt.order.outbox.OrderOutboxEventRepository;
 import com.nazila.ordermgmt.order.repository.OrderRepository;
 import com.nazila.ordermgmt.order.web.dto.CreateOrderRequest;
 import com.nazila.ordermgmt.order.web.dto.OrderResponse;
 import com.nazila.ordermgmt.order.web.mapper.OrderMapper;
+import com.nazila.ordermgmt.shared.correlation.CorrelationContext;
 import com.nazila.ordermgmt.shared.exception.ConflictException;
 import com.nazila.ordermgmt.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
@@ -15,6 +24,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -24,11 +34,18 @@ public class OrderServiceImpl implements OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
 
     private final OrderRepository orderRepository;
+    private final OrderOutboxEventRepository outboxEventRepository;
     private final IdempotencyKeyHasher idempotencyKeyHasher;
+    private final ObjectMapper objectMapper;
 
-    public OrderServiceImpl(OrderRepository orderRepository, IdempotencyKeyHasher idempotencyKeyHasher) {
+    public OrderServiceImpl(OrderRepository orderRepository,
+                             OrderOutboxEventRepository outboxEventRepository,
+                             IdempotencyKeyHasher idempotencyKeyHasher,
+                             ObjectMapper objectMapper) {
         this.orderRepository = orderRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.idempotencyKeyHasher = idempotencyKeyHasher;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -53,7 +70,37 @@ public class OrderServiceImpl implements OrderService {
         log.info("Created order {} for customer {} with {} item(s), total {} {}",
                 saved.getId(), saved.getCustomerId(), saved.getItems().size(), saved.getTotalAmount(), saved.getCurrency());
 
+        outboxEventRepository.save(buildOrderCreatedOutboxEvent(saved));
+
         return OrderMapper.toResponse(saved);
+    }
+
+    /**
+     * Inserted in the same transaction as the {@code Order} row (this
+     * method, like the rest of the class, runs under {@code @Transactional})
+     * so the event can never be lost between the commit and the publish —
+     * see {@code docs/outbox-pattern.md}.
+     */
+    private OrderOutboxEvent buildOrderCreatedOutboxEvent(Order order) {
+        List<OrderLineItem> items = order.getItems().stream()
+                .map(item -> new OrderLineItem(item.getProductId(), item.getQuantity(), item.getUnitPrice()))
+                .toList();
+        OrderCreatedEvent payload = new OrderCreatedEvent(
+                order.getId(), order.getCustomerId(), order.getCurrency(), order.getTotalAmount(), items);
+
+        EventEnvelope envelope = EventEnvelope.of(
+                EventType.ORDER_CREATED, order.getId(), CorrelationContext.current(), payload);
+
+        return OrderOutboxEvent.of(envelope.eventId(), order.getId(), envelope.eventType(),
+                writeJson(envelope), envelope.eventVersion(), envelope.correlationId());
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialize outbox event payload", e);
+        }
     }
 
     /**
@@ -103,5 +150,21 @@ public class OrderServiceImpl implements OrderService {
         Order saved = orderRepository.save(order);
         log.info("Cancelled order {}", saved.getId());
         return OrderMapper.toResponse(saved);
+    }
+
+    @Override
+    public void handleInventoryReservationFailed(UUID orderId, String reason) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order " + orderId + " was not found."));
+
+        if (order.getStatus() != OrderStatus.PENDING) {
+            log.info("Ignoring InventoryReservationFailedEvent for order {} in status {} (already handled)",
+                    orderId, order.getStatus());
+            return;
+        }
+
+        order.cancel();
+        orderRepository.save(order);
+        log.info("Cancelled order {} after inventory reservation failed: {}", orderId, reason);
     }
 }

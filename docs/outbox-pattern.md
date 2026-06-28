@@ -1,6 +1,9 @@
 # Outbox pattern
 
-**Status:** designed here, implemented in Milestone 2 alongside the Kafka event flow.
+**Status:** implemented in Milestone 2, in both `order-service` and `inventory-service`.
+The relay's poll/publish loop is implemented once, in `shared-kernel`'s `OutboxRelay`; each
+service supplies its own `outbox_events` table (via its own Flyway migration) and a
+one-line topic mapping (`OrderOutboxRelay`, `InventoryOutboxRelay`).
 
 ## The problem it solves
 
@@ -72,5 +75,7 @@ If a consumer fails to process an event after a bounded number of retries with b
 (transient errors: a momentary DB outage; not "this event is malformed," which retrying
 won't fix), it's routed to a `<topic>.DLT` topic rather than blocking the partition for
 every order behind it or silently dropping the event. Operators can inspect, fix, and
-replay from the DLT. See [`saga-flow.md`](saga-flow.md) for where this sits in the
-overall flow.
+replay from the DLT. Implemented once, for every consumer in every service, by
+`shared-kernel`'s `KafkaErrorHandlingAutoConfiguration` (three retries with exponential
+backoff, then `DeadLetterPublishingRecoverer`) — no service has to wire this up itself. See
+[`saga-flow.md`](saga-flow.md) for where this sits in the overall flow.

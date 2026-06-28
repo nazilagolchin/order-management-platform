@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://inventory-postgres:5432/inventory_management
+  kafka:
+    bootstrap-servers: redpanda:9092

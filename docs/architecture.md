@@ -8,11 +8,12 @@ between services is the events they publish and the APIs they expose.
 
 | Service               | Owns                          | Status                |
 |------------------------|-------------------------------|------------------------|
-| `order-service`        | `Order`, `OrderItem`          | Implemented (Milestone 1) |
-| `inventory-service`    | `Inventory` (stock levels)    | Planned (Milestone 2) |
+| `order-service`        | `Order`, `OrderItem`          | Implemented (Milestone 1–2) |
+| `inventory-service`    | `Inventory`, `StockReservation` | Implemented (Milestone 2) |
 | `payment-service`      | `Payment`                     | Planned (Milestone 3) |
 | `notification-service` | `Notification`                | Planned (Milestone 3) |
 | `shared-kernel`        | Cross-cutting concerns only — no domain entities | Implemented |
+| `event-contracts`      | Kafka event envelope + payload contracts, no logic | Implemented |
 
 `shared-kernel` is a library, not a service: it ships the `ApiError` contract, the
 domain exceptions every service maps to HTTP statuses, and the correlation-id filter. It
@@ -53,11 +54,12 @@ services) — not a shared model.
 HTTP request
   → CorrelationIdFilter (shared-kernel)       — stamps/propagates X-Correlation-Id
   → OrderController                            — validates, deserializes
-  → OrderService                                — transaction boundary, business rules
+  → OrderService                                — transaction boundary, business rules,
+                                                    writes the OrderCreatedEvent outbox row
   → OrderRepository (Spring Data JPA)           — persistence
   → GlobalApiExceptionHandler (shared-kernel)    — only on the error path
 ```
 
-Nothing about this changes once Kafka enters the picture in Milestone 2 — the outbox
-relay is an additional consumer of the same transaction, not a different request path.
-See [`outbox-pattern.md`](outbox-pattern.md).
+Kafka didn't change this request path when it arrived in Milestone 2 — the outbox relay
+(`OrderOutboxRelay`, a `@Scheduled` poller) is a separate consumer of the `outbox_events`
+table, not a different request path. See [`outbox-pattern.md`](outbox-pattern.md).

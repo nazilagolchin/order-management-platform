@@ -5,11 +5,13 @@ the patterns a distributed e-commerce backend actually needs in production: reli
 event publishing, idempotent APIs, saga-style orchestration across services, and
 centralized observability — not just CRUD over a database.
 
-> **Status: Milestone 1.** `order-service` is implemented end-to-end (API, persistence,
-> idempotency, OpenAPI, tests, Docker). `inventory-service`, `payment-service`, and
-> `notification-service`, along with the Kafka event flow that connects everything, are
-> designed (see [Architecture](#architecture) and `docs/`) and scheduled for Milestones 2–3.
-> See [Roadmap](#roadmap) for the exact delivery plan.
+> **Status: Milestone 2.** `order-service` and `inventory-service` are implemented
+> end-to-end, connected by a real Kafka event flow: `order-service` writes an
+> `OrderCreatedEvent` to its outbox on every order, a relay publishes it, and
+> `inventory-service` consumes it, reserves stock, and publishes the result back through
+> its own outbox. `payment-service` and `notification-service` are designed (see
+> [Architecture](#architecture) and `docs/`) and scheduled for Milestone 3. See
+> [Roadmap](#roadmap) for the exact delivery plan.
 
 ## Table of contents
 
@@ -147,19 +149,26 @@ and why it was chosen over orchestration is covered in
 Each of these is a deliberate response to a specific failure mode, not a checkbox.
 Full write-ups are in `docs/`; short version:
 
-- **Outbox pattern** — an event is written to an `outbox` table in the *same* database
-  transaction as the business state change, then relayed to Kafka asynchronously. This is
-  what makes "save the order and publish `OrderCreated`" atomic without a distributed
-  transaction. See [`docs/outbox-pattern.md`](docs/outbox-pattern.md). *(Milestone 2.)*
+- **Outbox pattern** — an event is written to an `outbox_events` table in the *same*
+  database transaction as the business state change, then relayed to Kafka by a
+  `@Scheduled` poller. This is what makes "save the order and publish `OrderCreated`"
+  atomic without a distributed transaction. Implemented in both `order-service`
+  (`OrderOutboxRelay`) and `inventory-service` (`InventoryOutboxRelay`); the polling logic
+  itself lives once in `shared-kernel`'s `OutboxRelay`. See
+  [`docs/outbox-pattern.md`](docs/outbox-pattern.md).
 - **Idempotency keys** — `POST /api/orders` accepts an `Idempotency-Key` header. Replaying
   the same key with the same payload returns the original order; reusing it with a
-  different payload returns `409 Conflict`. Implemented now — see
+  different payload returns `409 Conflict`. See
   [`OrderServiceImpl`](order-service/src/main/java/com/nazila/ordermgmt/order/service/OrderServiceImpl.java).
 - **Optimistic locking** — `Order.version` is a JPA `@Version` column. A concurrent update
   that loses the race gets `409 Conflict`, not a silently overwritten row.
-- **Retry handling & Dead Letter Topic** — Kafka consumers will retry transient failures
-  with backoff and route exhausted messages to a `*.DLT` topic rather than blocking the
-  partition or dropping the message. *(Milestone 2 — see `docs/saga-flow.md`.)*
+- **Idempotent consumers** — Kafka delivery is at least once, so `inventory-service`
+  records a `StockReservation` keyed by `orderId` before reserving stock, and a redelivered
+  `OrderCreatedEvent` is recognized and skipped rather than double-reserving.
+- **Retry handling & Dead Letter Topic** — every `@KafkaListener` in every service retries
+  a failing message with exponential backoff (`shared-kernel`'s
+  `KafkaErrorHandlingAutoConfiguration`) and then routes it to `<topic>.DLT` instead of
+  blocking the partition or dropping it. See `docs/saga-flow.md`.
 - **Clear transaction boundaries** — each `@Transactional` method maps to exactly one
   aggregate mutation; nothing reaches across service/database boundaries inside a
   transaction, by construction.
@@ -167,28 +176,33 @@ Full write-ups are in `docs/`; short version:
   surface as `400` with a field-level breakdown, not a stack trace.
 - **Centralized error responses** — every service shares one `ApiError` contract and one
   `@RestControllerAdvice` (`shared-kernel`), so a client learns the error shape once.
-- **Correlation ID** — a filter in `shared-kernel` stamps every request (and will stamp
-  every outgoing event) with an `X-Correlation-Id`, propagated through MDC so every log
-  line for a request — across every service that touches it — is traceable to one id.
-- **Event versioning** — event envelopes carry a `version` field from day one, so a
-  consumer can branch on schema rather than break on it. *(Milestone 2.)*
+- **Correlation ID** — a filter in `shared-kernel` stamps every request with an
+  `X-Correlation-Id`; outgoing event envelopes carry it too, and Kafka listeners restore it
+  into MDC for the duration of message processing, so one id traces a request across HTTP,
+  the outbox, and every consumer that reacts to it.
+- **Event versioning** — every `EventEnvelope` carries an `eventVersion` field from day
+  one, so a consumer can branch on schema rather than break on it.
 - **OpenAPI documentation** — every endpoint is annotated; Swagger UI is live at
   `/swagger-ui.html` on every service.
-- **Integration tests with Testcontainers** — tests run against a real PostgreSQL (and,
-  from Milestone 2, a real Kafka broker) in a disposable container, not an in-memory fake
-  that papers over driver-specific behavior.
+- **Integration tests with Testcontainers and embedded Kafka** — tests run against a real
+  PostgreSQL in a disposable container (not an in-memory fake that papers over
+  driver-specific behavior) and a real, in-process Kafka broker (`spring-kafka-test`'s
+  `@EmbeddedKafka`), so the outbox-relay-to-consumer round trip is exercised end to end
+  without requiring a Kafka container.
 
 ## Project structure
 
 ```
 order-management-platform/
-├── shared-kernel/          # Cross-service error model, exceptions, correlation-id filter
+├── event-contracts/        # Plain-Java Kafka event envelope + payload contracts
+├── shared-kernel/          # Cross-service error model, exceptions, correlation-id filter,
+│                            # outbox relay, Kafka retry/DLT config
 ├── order-service/          # Implemented: owns the order aggregate
-├── inventory-service/      # Planned (Milestone 2): stock reservation
+├── inventory-service/      # Implemented: owns stock reservation
 ├── payment-service/        # Planned (Milestone 3): payment simulation
 ├── notification-service/   # Planned (Milestone 3): customer notifications
 ├── docs/                   # Architecture & pattern deep-dives
-├── docker-compose.yml      # PostgreSQL, Redis, Redpanda, order-service
+├── docker-compose.yml      # 2x PostgreSQL, Redis, Redpanda, order-service, inventory-service
 └── .github/workflows/ci.yml
 ```
 
@@ -198,19 +212,21 @@ Prerequisites: Docker (with Compose). For local development without Docker, JDK 
 Maven.
 
 ```bash
-# Build the image and start Postgres, Redis, Redpanda, and order-service
+# Build the images and start both Postgres instances, Redis, Redpanda,
+# order-service, and inventory-service
 docker compose up --build
 
-# order-service:   http://localhost:8081
-# Swagger UI:      http://localhost:8081/swagger-ui.html
-# Health:          http://localhost:8081/actuator/health
+# order-service:       http://localhost:8081  (Swagger UI: /swagger-ui.html)
+# inventory-service:   http://localhost:8082  (Swagger UI: /swagger-ui.html)
 ```
 
-Running just `order-service` against a local Maven/JDK toolchain (Postgres still needs to
-be running, e.g. via `docker compose up postgres`):
+Running a single service against a local Maven/JDK toolchain (its own Postgres and Redpanda
+still need to be running, e.g. via `docker compose up postgres redpanda` or `docker compose
+up inventory-postgres redpanda`):
 
 ```bash
 mvn -pl order-service -am spring-boot:run
+mvn -pl inventory-service -am spring-boot:run
 ```
 
 Running the test suite:
@@ -251,11 +267,16 @@ curl -X POST http://localhost:8081/api/orders/{id}/cancel
 
 ## Testing strategy
 
-Unit tests cover domain invariants (`Order`) and service-layer branching (idempotency
-replay/conflict, not-found, cancellation rules) with mocked repositories — fast, no I/O.
-Integration tests spin up real PostgreSQL via Testcontainers and drive the actual HTTP API
-end-to-end (create → get, cancel → re-cancel conflict, idempotency replay → conflict).
-Full rationale, including why Testcontainers over H2, is in
+Unit tests cover domain invariants (`Order`, `Inventory`) and service-layer branching
+(idempotency replay/conflict, not-found, cancellation rules, stock reservation
+success/failure/redelivery) with mocked repositories — fast, no I/O. Integration tests spin
+up real PostgreSQL via Testcontainers and an embedded Kafka broker (`spring-kafka-test`),
+driving the actual HTTP API and Kafka listeners end-to-end: `order-service`'s suite covers
+create → get, cancel → re-cancel conflict, idempotency replay → conflict, and that creating
+an order is actually published to `order.events` via the outbox relay;
+`inventory-service`'s suite publishes a real `OrderCreatedEvent` and asserts stock is
+decremented and `InventoryReservedEvent`/`InventoryReservationFailedEvent` comes out the
+other side. Full rationale, including why Testcontainers over H2, is in
 [`docs/testing-strategy.md`](docs/testing-strategy.md).
 
 ## Roadmap
@@ -263,9 +284,9 @@ Full rationale, including why Testcontainers over H2, is in
 - [x] **Milestone 1** — `order-service`: PostgreSQL persistence, idempotent `POST
       /api/orders`, optimistic locking, centralized errors, correlation IDs, OpenAPI,
       Testcontainers integration tests, Docker Compose, CI.
-- [ ] **Milestone 2** — Outbox-backed event publishing from `order-service`;
+- [x] **Milestone 2** — Outbox-backed event publishing from `order-service`;
       `inventory-service` consuming `OrderCreatedEvent` and reserving stock; retry/DLT
-      handling.
+      handling for every Kafka consumer.
 - [ ] **Milestone 3** — `payment-service` (simulated payment, saga completion) and
       `notification-service` (terminal-event consumer); full end-to-end saga integration
       test across all four services.

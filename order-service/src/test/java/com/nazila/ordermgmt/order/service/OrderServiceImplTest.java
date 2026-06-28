@@ -1,8 +1,12 @@
 package com.nazila.ordermgmt.order.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nazila.ordermgmt.events.EventType;
 import com.nazila.ordermgmt.order.domain.Order;
 import com.nazila.ordermgmt.order.domain.OrderItem;
+import com.nazila.ordermgmt.order.domain.OrderStatus;
+import com.nazila.ordermgmt.order.outbox.OrderOutboxEvent;
+import com.nazila.ordermgmt.order.outbox.OrderOutboxEventRepository;
 import com.nazila.ordermgmt.order.repository.OrderRepository;
 import com.nazila.ordermgmt.order.web.dto.CreateOrderRequest;
 import com.nazila.ordermgmt.order.web.dto.OrderItemRequest;
@@ -24,6 +28,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,11 +38,16 @@ class OrderServiceImplTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private OrderOutboxEventRepository outboxEventRepository;
+
     private OrderServiceImpl orderService;
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderServiceImpl(orderRepository, new IdempotencyKeyHasher(new ObjectMapper()));
+        orderService = new OrderServiceImpl(
+                orderRepository, outboxEventRepository, new IdempotencyKeyHasher(objectMapper), objectMapper);
     }
 
     private CreateOrderRequest sampleRequest() {
@@ -57,6 +67,21 @@ class OrderServiceImplTest {
         assertThat(response.status()).isEqualTo("PENDING");
         assertThat(response.totalAmount()).isEqualByComparingTo(new BigDecimal("20.00"));
         assertThat(response.items()).hasSize(1);
+    }
+
+    @Test
+    void createOrderWritesAnOrderCreatedOutboxEventInTheSameCall() {
+        CreateOrderRequest request = sampleRequest();
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        ArgumentCaptor<OrderOutboxEvent> captor = ArgumentCaptor.forClass(OrderOutboxEvent.class);
+        when(outboxEventRepository.save(captor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        OrderResponse response = orderService.createOrder(request, null);
+
+        OrderOutboxEvent event = captor.getValue();
+        assertThat(event.getEventType()).isEqualTo(EventType.ORDER_CREATED);
+        assertThat(event.getAggregateId()).isEqualTo(response.id());
+        assertThat(event.getPayload()).contains(response.id().toString());
     }
 
     @Test
@@ -118,5 +143,36 @@ class OrderServiceImplTest {
 
         assertThat(response.status()).isEqualTo("CANCELLED");
         assertThat(captor.getValue().getStatus().name()).isEqualTo("CANCELLED");
+    }
+
+    @Test
+    void handleInventoryReservationFailedCancelsAPendingOrder() {
+        Order order = Order.create(UUID.randomUUID(), "USD");
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        orderService.handleInventoryReservationFailed(order.getId(), "out of stock");
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+    }
+
+    @Test
+    void handleInventoryReservationFailedIsANoOpForAnAlreadyCancelledOrder() {
+        Order order = Order.create(UUID.randomUUID(), "USD");
+        order.cancel();
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.handleInventoryReservationFailed(order.getId(), "out of stock");
+
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void handleInventoryReservationFailedThrowsWhenOrderIsMissing() {
+        UUID id = UUID.randomUUID();
+        when(orderRepository.findById(id)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> orderService.handleInventoryReservationFailed(id, "out of stock"))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 }

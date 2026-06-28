@@ -1,7 +1,8 @@
 # Saga flow
 
-**Status:** the full multi-service saga ships in Milestones 2–3; this document is the
-design it's being built against.
+**Status:** the order ↔ inventory leg is implemented (Milestone 2); the inventory ↔
+payment ↔ notification legs ship in Milestone 3. This document is the design the
+remaining legs are being built against.
 
 ## Choreography, not orchestration
 
@@ -65,9 +66,11 @@ are naturally idempotent already) rather than an unconditional insert or increme
 Each consumer retries a failed event a bounded number of times with exponential backoff,
 on the assumption that most failures (a momentary DB connection blip) are transient. An
 event that's still failing after retries are exhausted is routed to a `<topic>.DLT` topic
-instead of being dropped or blocking every event behind it on the same partition. DLT
-entries are inspected and replayed manually — or in Milestone 2, by a small admin endpoint
-that re-publishes a DLT entry back onto its original topic.
+instead of being dropped or blocking every event behind it on the same partition. This
+policy is implemented once, in `shared-kernel`'s `KafkaErrorHandlingAutoConfiguration`, and
+applies to every `@KafkaListener` in every service automatically. DLT entries are currently
+inspected and replayed manually; a small admin endpoint that re-publishes a DLT entry back
+onto its original topic remains a candidate for a later milestone.
 
 ## Event versioning
 

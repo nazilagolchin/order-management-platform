@@ -46,11 +46,24 @@ stays fast and Docker-free, while `mvn verify` (used in CI) runs both. This spli
 so a contributor without Docker installed locally can still run the full unit suite —
 only `mvn verify` requires Docker.
 
-## Saga-level testing (Milestone 2+)
+## Kafka integration testing (Milestone 2)
 
-Once `inventory-service` and `payment-service` exist, a platform-level integration test
-will spin up Postgres + Kafka (via Testcontainers' Kafka module) and all relevant services
-in the same Spring context, publish a real `OrderCreatedEvent`, and assert the order
-reaches `CONFIRMED` or `CANCELLED` with the correct compensating side effects — the
-automated equivalent of the [business flow](../README.md#business-flow) diagram in the
-README.
+Each service's integration test now also exercises Kafka, using `spring-kafka-test`'s
+`@EmbeddedKafka` (an in-process broker) rather than a Testcontainers Kafka container:
+`order-service`'s suite asserts that creating an order is actually published to
+`order.events` by the outbox relay; `inventory-service`'s suite publishes a real
+`OrderCreatedEvent` and asserts stock is decremented and the correct event
+(`InventoryReservedEvent` or `InventoryReservationFailedEvent`) comes out on
+`inventory.events`. `@EmbeddedKafka` was chosen over a Testcontainers broker for this:
+it's purpose-built for exactly this scenario, starts in-process (no Docker, no container
+startup latency), and Postgres — where the real driver-specific behavior actually matters
+— still goes through Testcontainers.
+
+## Saga-level testing (Milestone 3)
+
+Once `payment-service` exists, a platform-level integration test will spin up Postgres +
+Kafka and every service's Spring context together, publish a real `OrderCreatedEvent`, and
+assert the order reaches `CONFIRMED` or `CANCELLED` with the correct compensating side
+effects — the automated equivalent of the [business flow](../README.md#business-flow)
+diagram in the README. Today, that round trip is only verified one hop at a time (order →
+inventory), per service.

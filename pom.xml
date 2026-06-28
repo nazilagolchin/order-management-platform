@@ -16,8 +16,10 @@
     </description>
 
     <modules>
+        <module>event-contracts</module>
         <module>shared-kernel</module>
         <module>order-service</module>
+        <module>inventory-service</module>
     </modules>
 
     <properties>
@@ -55,6 +57,11 @@
             <dependency>
                 <groupId>com.nazila.ordermgmt</groupId>
                 <artifactId>shared-kernel</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nazila.ordermgmt</groupId>
+                <artifactId>event-contracts</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

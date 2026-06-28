@@ -1,1 +1,3 @@
 com.nazila.ordermgmt.shared.autoconfigure.SharedKernelAutoConfiguration
+com.nazila.ordermgmt.shared.autoconfigure.JacksonMoneyAutoConfiguration
+com.nazila.ordermgmt.shared.kafka.KafkaErrorHandlingAutoConfiguration
