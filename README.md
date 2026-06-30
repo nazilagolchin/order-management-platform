@@ -51,25 +51,26 @@ communicating asynchronously through Kafka, each owning its own data:
 
 ```mermaid
 flowchart LR
-    Client(["Client"]) -->|"HTTP"| OrderService["order-service"]
+    Client(Client) -->|HTTP| OrderService[order-service]
 
-    OrderService -->|"JDBC"| OrderDB[("PostgreSQL\norders")]
-    OrderService -->|"publish via outbox"| Bus{{"Kafka / Redpanda"}}
+    OrderService -->|JDBC| OrderDB[(PostgreSQL orders)]
+    OrderService -->|publish via outbox| Bus([Kafka / Redpanda])
 
-    Bus -->|"OrderCreatedEvent"| InventoryService["inventory-service"]
-    InventoryService -->|"JDBC"| InventoryDB[("PostgreSQL\ninventory")]
-    InventoryService -->|"publish via outbox"| Bus
+    Bus -->|OrderCreatedEvent| InventoryService[inventory-service]
+    InventoryService -->|JDBC| InventoryDB[(PostgreSQL inventory)]
+    InventoryService -->|publish via outbox| Bus
 
-    Bus -->|"InventoryReservedEvent"| PaymentService["payment-service"]
-    PaymentService -->|"JDBC"| PaymentDB[("PostgreSQL\npayments")]
-    PaymentService -->|"publish via outbox"| Bus
+    Bus -->|InventoryReservedEvent| PaymentService[payment-service]
+    PaymentService -->|JDBC| PaymentDB[(PostgreSQL payments)]
+    PaymentService -->|publish via outbox| Bus
 
-    Bus -->|"PaymentCompleted/Failed,\nInventoryReservationFailed"| OrderService
+    Bus -->|PaymentCompleted / Failed| OrderService
+    Bus -->|InventoryReservationFailed| OrderService
 
-    Bus -->|"terminal events"| NotificationService["notification-service"]
-    NotificationService -->|"JDBC"| NotificationDB[("PostgreSQL\nnotifications")]
+    Bus -->|terminal events| NotificationService[notification-service]
+    NotificationService -->|JDBC| NotificationDB[(PostgreSQL notifications)]
 
-    OrderService -.->|"idempotency cache (planned)"| Redis[("Redis")]
+    OrderService -.->|idempotency cache planned| Redis[(Redis)]
 ```
 
 Why a monorepo instead of five repositories: at this scale, splitting repos buys you
