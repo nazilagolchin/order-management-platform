@@ -2,7 +2,6 @@ package com.nazila.ordermgmt.shared.outbox;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.MappedSuperclass;
 
 import java.time.Instant;
@@ -32,8 +31,7 @@ public abstract class OutboxEvent {
     @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 
-    @Lob
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "TEXT")
     private String payload;
 
     @Column(name = "event_version", nullable = false)
