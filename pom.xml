@@ -87,11 +87,22 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.5.0</version>
+                    <configuration>
+                        <!-- No module-info.java anywhere in this reactor; Surefire's default
+                             module-path auto-detection misclassifies dependency jars as
+                             modules and splits target/classes onto the module path, which
+                             breaks JUnit5 test discovery with a NoClassDefFoundError for
+                             perfectly-present classes. -->
+                        <useModulePath>false</useModulePath>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>3.5.0</version>
+                    <configuration>
+                        <useModulePath>false</useModulePath>
+                    </configuration>
                     <executions>
                         <execution>
                             <goals>

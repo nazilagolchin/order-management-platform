@@ -104,6 +104,12 @@
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                        <configuration>
+                            <!-- Keep the original thin jar as the main artifact so Failsafe's
+                                 classpath gets target/classes-derived jar, not the Spring Boot
+                                 fat jar whose BOOT-INF/classes/ layout breaks JVM classloading. -->
+                            <classifier>exec</classifier>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
