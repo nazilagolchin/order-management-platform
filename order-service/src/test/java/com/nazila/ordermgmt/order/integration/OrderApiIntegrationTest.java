@@ -12,6 +12,7 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,6 +80,8 @@ class OrderApiIntegrationTest {
     void subscribeToOrderEvents() {
         Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("test-consumer", "true", embeddedKafkaBroker);
         consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         orderEventsConsumer = new DefaultKafkaConsumerFactory<String, String>(consumerProps).createConsumer();
         embeddedKafkaBroker.consumeFromAnEmbeddedTopic(orderEventsConsumer, Topics.ORDER_EVENTS);
     }

@@ -5,6 +5,8 @@ import com.nazila.ordermgmt.shared.exception.BusinessRuleViolationException;
 import com.nazila.ordermgmt.shared.exception.ConflictException;
 import com.nazila.ordermgmt.shared.exception.ResourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +25,8 @@ import java.util.List;
  */
 @RestControllerAdvice
 public class GlobalApiExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalApiExceptionHandler.class);
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(ResourceNotFoundException ex, HttpServletRequest request) {
@@ -71,11 +75,14 @@ public class GlobalApiExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiError> handleIllegalArgument(IllegalArgumentException ex, HttpServletRequest request) {
+        log.warn("IllegalArgumentException on {} {}: {}", request.getMethod(), request.getRequestURI(),
+                ex.getMessage(), ex);
         return build(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request) {
+        log.error("Unhandled exception on {} {}", request.getMethod(), request.getRequestURI(), ex);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred.", request);
     }
 
