@@ -81,6 +81,10 @@
                     <version>3.13.0</version>
                     <configuration>
                         <release>${maven.compiler.release}</release>
+                        <!-- Spring Framework 6.1 removed LocalVariableTableParameterNameDiscoverer.
+                             Without -parameters, Spring MVC cannot infer @PathVariable/@RequestParam
+                             names from the parameter name at runtime. -->
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>
